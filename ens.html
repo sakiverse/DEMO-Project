@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>DEMO</title>
+<style>
+body {
+background-color: #000000;
+color: #ffffff;
+font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+margin: 0;
+padding: 0;
+overflow: hidden;
+user-select: none;
+-webkit-user-select: none;
+touch-action: none;
+}
+canvas {
+display: block;
+width: 100%;
+height: 100%;
+-webkit-tap-highlight-color: transparent;
+}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+<script>
+
+const questions = [
+{ TYPE: 1, q: "What color do you like", o: ["Colorless","White", "Black", "Blue","Red","yellow", "colorful"], a: 0, f: {0:"colorless",1:"clean/Simple", 2:"mystery", 3:"sky color", 4:"red",5:"sunshine",6:"colorful", default:""} },
+{ TYPE: 3, q: "Connect colors with corresponding imagery (click to connect, double-click to move nodes)", left: ["red", "blue", "black", "white"], right: ["fire", "ocean", "night", "cloud"], matches: [0, 1, 2, 3], f: "The resonance of colors with the world", failF: "Some connections seem to be broken" },
+{ TYPE: 2, q: "Catch those words you like", words: ["cute", "Imperfect","dream","hopes","hard","easy","Indifferent", "perfect", "Justice"], correct: ["cute", "Imperfect","dream","hopes","hard","easy","Indifferent", "perfect", "Justice"], player:"|___|", f: "It seems like you like quite a lot of things...", failF: "It's okay if some were not caught." },
+{ TYPE: 1, q: "Leave your message", o: ["It has taught me a lot", "Makes me feel confused", "Very interesting", "Bored"], a: 0, f: {0:"I hope these gains can help you", 1:"Some questions might make you a little confused.", 2:"Can increase interest", 3:"When you're bored, you can do things you like!", default:""} }
+];
+
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+
+let currentQuestionIndex = -1;
+let score = 0;
+let sceneTransitionAlpha = 0;
+let endScreenAlpha = 0;
+let mouseX = -1000, mouseY = -1000;
+let isTouching = false;
+let buttons = [];
+let titleRect = { x: 0, y: 0, w: 0, h: 0, text: "" };
+let gameItems = [];
+
+let underlineY = 0, targetUnderlineY = 0, underlineAlpha = 0, targetAlpha = 0;
+let lastHoverTime = 0, activeHoverBtnIndex = -1;
+let currentLineX = 0, currentLineW = 0;
+
+let basketX = 0, basketW = 100, basketH = 30, caughtCount = 0, totalWords = 0;
+let spawnTimer = 0, gameDuration = 0, generatedCount = 0, gameReady = true, gameStartDelayTimer = 0;
+let overlayText = "", overlayTimer = 0;
+let lastClickTime = 0, lastClickPos = {x: 0, y: 0};
+
+
+let matchNodesLeft = [];
+let matchNodesRight = [];
+let connections = []; 
+let tempLine = null; 
+let checkBtnRect = {};
+let isDrawingLine = false;   
+let isMovingNode = false;    
+let activeDragNode = null;   
+let matchGameFadingOut = false;
+let matchGameFadeAlpha = 1;
+
+
+let startTextPulse = 0;
+
+
+const SMOOTH_FACTOR = 0.15; 
+const OVERLAY_FADE_IN_DURATION = 0.4;
+const OVERLAY_HOLD_TIME = 0.3;
+const OVERLAY_FADE_DURATION = 1;
+const OVERLAY_TOTAL_TIME = OVERLAY_FADE_IN_DURATION + OVERLAY_HOLD_TIME + OVERLAY_FADE_DURATION;
+const UNDERLINE_SPEED = 0.12;
+const HOVER_OFFSET = 6;
+const IDLE_DROP = 20;
+const LIFE_TIME = 1.0;
+const GRAVITY = 0.5;
+const DRAG = 0.95;
+const ROTATION_DRAG = 0.96;
+
+const COLORS = {
+bg: '#000000', textDim: '#555555', textHover: '#eeeeee', basket: '#ffffff', item: '#aaaaaa',
+subtitle: '#888888', line: '#ffffff', checkBtn: '#ffffff', nodeDrag: '#ffeb3b'
+};
+
+
+
+function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = window.innerWidth * dpr;
+    canvas.height = window.innerHeight * dpr;
+    ctx.scale(dpr, dpr);
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    basketW = Math.min(width * 0.6, 200);
+    basketX = width / 2 - basketW / 2;
+    if (currentQuestionIndex === -1 || currentQuestionIndex >= questions.length) {
+        mouseX = width / 2; mouseY = height / 2;
+    }
+    if(currentQuestionIndex >= 0 && currentQuestionIndex < questions.length && questions[currentQuestionIndex].TYPE === 3 && matchNodesLeft.length === 0) {
+        initMatchNodes();
+    }
+}
+window.addEventListener('resize', resize);
+resize();
+
+function startGame() {
+    currentQuestionIndex = 0; score = 0; sceneTransitionAlpha = 0; endScreenAlpha = 0;
+    underlineAlpha = 0; targetAlpha = 0; activeHoverBtnIndex = -1; gameReady = true;
+    loadLevelData();
+}
+
+function restartGame() { startGame(); }
+
+function initMatchNodes() {
+    const qData = questions[currentQuestionIndex];
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const leftX = width * 0.25;
+    const rightX = width * 0.75;
+    const count = qData.left.length;
+    const startY = height * 0.3;
+    const gap = (height * 0.5) / (count + 1);
+    
+    matchNodesLeft = [];
+    matchNodesRight = [];
+    
+    for(let i=0; i<count; i++) {
+        let y = startY + (i+1) * gap;
+        const createNode = (text, x, side, index) => ({
+            text, x, y, index, side, w: 40, h: 40,
+            alpha: 1, targetAlpha: 1, colorAlpha: 1, targetColorAlpha: 0
+        });
+        matchNodesLeft.push(createNode(qData.left[i], leftX, 'left', i));
+        matchNodesRight.push(createNode(qData.right[i], rightX, 'right', i));
+    }
+    
+    checkBtnRect = { x: width - 120, y: height - 80, w: 100, h: 50, alpha: 1, targetAlpha: 1 };
+}
+
+function loadLevelData() {
+    if (currentQuestionIndex >= questions.length) {
+        endScreenAlpha = 0; buttons = []; titleRect = { x: 0, y: 0, w: 0, h: 0, text: "" };
+        gameItems = []; underlineAlpha = 0;
+        return;
+    }
+    const qData = questions[currentQuestionIndex];
+    generatedCount = 0; spawnTimer = 0; gameDuration = 0;
+    
+    connections = []; 
+    tempLine = null;
+    isDrawingLine = false;
+    isMovingNode = false;
+    activeDragNode = null;
+    matchGameFadingOut = false;
+    matchGameFadeAlpha = 1;
+    sceneTransitionAlpha = 0;
+
+    matchNodesLeft = [];
+    matchNodesRight = [];
+    
+    if (qData.TYPE === 3) {
+        initMatchNodes();
+    }
+
+    if (qData.TYPE === 1) {
+            buttons = [];
+            titleRect = { x: 0, y: 0, w: 0, h: 0, text: "" };
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+            const centerX = width / 2;
+            const btnWidth = Math.min(300, width * 0.85);
+            const btnHeight = 50;
+            const gap = 15;
+            const totalHeight = qData.o.length * (btnHeight + gap);
+            let currentY = height * 0.45 - (totalHeight / 2) + (btnHeight/2);
+            qData.o.forEach((opt, idx) => {
+                buttons.push({
+                    x: centerX - btnWidth / 2, y: currentY, w: btnWidth, h: btnHeight, text: opt, index: idx,
+                    alpha: 0, targetAlpha: 1, hoverAlpha: 0, targetHoverAlpha: 0
+                });
+                currentY += btnHeight + gap;
+            });
+            ctx.font = '20px sans-serif';
+            const metrics = ctx.measureText(qData.q);
+            const titleW = Math.min(metrics.width + 20, width * 0.9);
+            titleRect = { x: centerX - titleW / 2, y: height * 0.25, w: titleW, h: 30, text: qData.q, isTitle: true };
+            
+
+            underlineY = currentY; 
+            targetUnderlineY = currentY;
+            underlineAlpha = 0; targetAlpha = 1; activeHoverBtnIndex = -1;
+    } else if (qData.TYPE === 2) {
+        totalWords = qData.words.length;
+        const width = window.innerWidth;
+        basketX = width / 2 - basketW / 2;
+        mouseX = width / 2;
+        gameItems = [];
+        generatedCount = 0;
+        targetAlpha = 0;
+        caughtCount = 0;
+    } 
+}
+
+
+
+function spawnWord(text, yOverride) {
+    const width = window.innerWidth;
+    const randomX = Math.random() * (width - basketW - 40) + 20;
+    gameItems.push({ text, x: randomX, y: yOverride !== undefined ? yOverride : -30, speed: 3 + Math.random() * 2 + (currentQuestionIndex * 0.2), active: true });
+}
+
+function updateInput(x, y) {
+    mouseX = x; mouseY = y;
+    if (currentQuestionIndex >= 0 && currentQuestionIndex < questions.length && questions[currentQuestionIndex].TYPE === 2) {
+        const width = window.innerWidth;
+        let targetX = x - basketW / 2;
+        if (targetX < 0) targetX = 0;
+        if (targetX + basketW > width) targetX = width - basketW;
+        basketX += (targetX - basketX) * 0.3;
+    }
+    if (isMovingNode && activeDragNode) {
+        activeDragNode.x = x;
+        activeDragNode.y = y;
+    } else if (isDrawingLine && tempLine) {
+        tempLine.x = x;
+        tempLine.y = y;
+    }
+}
+
+function handleRelease(x, y) {
+    if (currentQuestionIndex < 0 || currentQuestionIndex >= questions.length) return;
+    const qData = questions[currentQuestionIndex];
+
+    if (qData.TYPE === 3 && !matchGameFadingOut) {
+        if (isDrawingLine && tempLine) {
+            let targetNode = findNearestValidNode(x, y, tempLine.startNode);
+            if (targetNode) {
+                connections.push({
+                    id: Date.now() + Math.random(),
+                    leftIndex: tempLine.startNode.side === 'left' ? tempLine.startNode.index : targetNode.index,
+                    rightIndex: tempLine.startNode.side === 'left' ? targetNode.index : tempLine.startNode.index,
+                    alpha: 0, 
+                    targetAlpha: 1,
+                    dropY: 0,
+                    isDeleting: false,
+                    deleteTimer: 0,
+                    isHovered: false, 
+                    hoverTargetAlpha: 0.6 
+                });
+            }
+            tempLine = null;
+            isDrawingLine = false;
+            activeDragNode = null;
+            return;
+        }
+        if (isMovingNode && activeDragNode) {
+            isMovingNode = false;
+            activeDragNode = null;
+            return;
+        }
+    }
+    isDrawingLine = false;
+    isMovingNode = false;
+    activeDragNode = null;
+    tempLine = null;
+}
+
+function handleClick(x, y, isDoubleClick = false) {
+    if (currentQuestionIndex === -1) { startGame(); return; }
+    if (currentQuestionIndex >= questions.length) {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        const btnW = 200, btnH = 50;
+        const bx = width/2 - btnW/2, by = height * 0.75;
+        if (x >= bx && x <= bx+btnW && y >= by && y <= by+btnH) restartGame();
+        return;
+    }
+    if (matchGameFadingOut) return;
+
+    const qData = questions[currentQuestionIndex];
+
+    if (qData.TYPE === 1 && buttons.length > 0) {
+        let clickedBtn = null;
+        for (let i = buttons.length - 1; i >= 0; i--) {
+            let btn = buttons[i];
+            if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
+                clickedBtn = btn; break;
+            }
+        }
+        if (clickedBtn) handleQuizAnswer(clickedBtn.index, qData, x, y);
+    }
+    else if (qData.TYPE === 3) {
+
+        if (x >= checkBtnRect.x && x <= checkBtnRect.x + checkBtnRect.w && y >= checkBtnRect.y && y <= checkBtnRect.y + checkBtnRect.h) {
+            finishMatchGame(qData); return;
+        }
+
+
+        if (isDoubleClick) {
+            let clickedConnIndex = -1;
+            for (let i = connections.length - 1; i >= 0; i--) {
+                let conn = connections[i];
+                if (conn.isDeleting) continue;
+                let lNode = matchNodesLeft[conn.leftIndex];
+                let rNode = matchNodesRight[conn.rightIndex];
+                if (distToSegment(x, y, lNode.x, lNode.y, rNode.x, rNode.y) < 20) {
+                    clickedConnIndex = i;
+                    break;
+                }
+            }
+            
+            if (clickedConnIndex !== -1) {
+                connections[clickedConnIndex].isDeleting = true;
+                connections[clickedConnIndex].deleteTimer = 0.6; 
+                connections[clickedConnIndex].targetAlpha = 0;
+                return;
+            }
+        }
+    }
+}
+
+function getClickedNode(x, y) {
+    const threshold = 40;
+    for (let node of matchNodesLeft) if (Math.hypot(node.x - x, node.y - y) < threshold) return node;
+    for (let node of matchNodesRight) if (Math.hypot(node.x - x, node.y - y) < threshold) return node;
+    return null;
+}
+
+function findNearestValidNode(x, y, startNode) {
+    let nearestNode = null;
+    let minDist = Infinity;
+    const searchRadius = 150;
+    const allNodes = startNode.side === 'left' ? matchNodesRight : matchNodesLeft;
+    for (let node of allNodes) {
+        let isConnected = connections.some(c => !c.isDeleting && (
+            (node.side === 'left' && c.leftIndex === node.index) ||
+            (node.side === 'right' && c.rightIndex === node.index)
+        ));
+        if (isConnected) continue;
+        let dist = Math.hypot(node.x - x, node.y - y);
+        if (dist < minDist && dist < searchRadius) { minDist = dist; nearestNode = node; }
+    }
+    return nearestNode;
+}
+
+function distToSegment(px, py, x1, y1, x2, y2) {
+    let A = px - x1, B = py - y1, C = x2 - x1, D = y2 - y1;
+    let dot = A * C + B * D, len_sq = C * C + D * D, param = -1;
+    if (len_sq != 0) param = dot / len_sq;
+    let xx, yy;
+    if (param < 0) { xx = x1; yy = y1; }
+    else if (param > 1) { xx = x2; yy = y2; }
+    else { xx = x1 + param * C; yy = y1 + param * D; }
+    return Math.sqrt((px - xx)**2 + (py - yy)**2);
+}
+
+function handleQuizAnswer(index, qData, clickX, clickY) {
+    // 1. 计分与反馈 (保持不变)
+    const correctAnswers = Array.isArray(qData.a) ? qData.a : [qData.a];
+    const hasAnswer = qData.a !== undefined;
+    const isCorrect = hasAnswer && correctAnswers.includes(index);
+    if (hasAnswer && isCorrect) score += (100 / questions.length);
+    
+    let text = "";
+    if (qData.f) {
+        if (typeof qData.f === 'object' && !Array.isArray(qData.f)) text = qData.f[index] !== undefined ? qData.f[index] : qData.f['default'];
+        else if (Array.isArray(qData.f)) text = qData.f[index] || "收到";
+        else text = qData.f;
+        if (!text && qData.f['default']) text = qData.f['default'];
+    }
+    overlayText = text || "收到反馈";
+    overlayTimer = OVERLAY_TOTAL_TIME;
+    
+    // 2. 准备切换
+    const nextIndex = currentQuestionIndex + 1;
+    currentQuestionIndex = nextIndex;
+    sceneTransitionAlpha = 0;
+
+    // --- 新增：触发向下淡出 ---
+    
+    // 1. 标记按钮：目标透明度设为0（让 draw 函数里的逻辑生效）
+    buttons.forEach(btn => {
+        btn.targetAlpha = 0;
+    });
+
+    // 2. 标记标题
+    if (titleRect) {
+        titleRect.targetAlpha = 0;
+    }
+
+        loadLevelData();
+
+    // 4. 直接返回，阻止立即切换
+    return;
+}
+
+
+
+
+
+function update() {
+
+    if (currentQuestionIndex < 0 || currentQuestionIndex >= questions.length) return;
+    const qData = questions[currentQuestionIndex];
+
+
+    if (qData.TYPE === 3 && !matchGameFadingOut) {
+        for (let i = connections.length - 1; i >= 0; i--) {
+            let conn = connections[i];
+            if (conn.isDeleting) {
+                conn.deleteTimer -= 1/60;
+                conn.dropY += 5; 
+                if (conn.deleteTimer <= 0) connections.splice(i, 1);
+            } else {
+                if (conn.alpha < conn.targetAlpha) conn.alpha += SMOOTH_FACTOR;
+                else if (conn.alpha > conn.targetAlpha) conn.alpha -= SMOOTH_FACTOR;
+            }
+        }
+        
+        if (!isMovingNode && !isDrawingLine) {
+            let foundHover = false;
+            for (let i = connections.length - 1; i >= 0; i--) {
+                let conn = connections[i];
+                if (conn.isDeleting) continue;
+                if (foundHover) {
+                    if (conn.isHovered) { conn.isHovered = false; conn.targetAlpha = 0.6; }
+                    continue;
+                }
+                let lNode = matchNodesLeft[conn.leftIndex];
+                let rNode = matchNodesRight[conn.rightIndex];
+                const isMouseOver = !isTouching && distToSegment(mouseX, mouseY, lNode.x, lNode.y, rNode.x, rNode.y) < 15;
+                if (isMouseOver) {
+                    if (!conn.isHovered) { conn.isHovered = true; conn.targetAlpha = 1.0; }
+                    foundHover = true;
+                } else {
+                    if (conn.isHovered) { conn.isHovered = false; conn.targetAlpha = 0.6; }
+                }
+            }
+        }
+    }
+
+
+    if (qData.TYPE === 2) {
+        if (!gameReady) {
+            if (gameStartDelayTimer > 0) { gameStartDelayTimer--; return; }
+            gameReady = true;
+            const width = window.innerWidth;
+            for(let i=0; i<Math.min(3, totalWords); i++) spawnWord(qData.words[i], -50 - (i * 150));
+            generatedCount = Math.min(3, totalWords);
+            return;
+        }
+        const height = window.innerHeight, width = window.innerWidth;
+        gameDuration++;
+        let spawnRate = 40;
+        if (generatedCount > totalWords * 0.5) spawnRate = 25;
+        if (spawnTimer % spawnRate === 0 && generatedCount < totalWords) {
+            spawnWord(qData.words[generatedCount]); generatedCount++;
+        }
+        spawnTimer++;
+        const basketY = height - 100;
+
+        gameItems.forEach(item => {
+            if (!item.active) return;
+            item.y += item.speed;
+            if (item.y + 10 >= basketY && item.y <= basketY + basketH) {
+                if (item.x + 30 >= basketX - 10 && item.x <= basketX + basketW + 10) { item.active = false; caughtCount++; }
+            }
+            if (item.y > height) item.active = false;
+        });
+
+        const inactiveCount = gameItems.filter(it => !it.active).length;
+        if (inactiveCount >= totalWords && generatedCount >= totalWords && gameDuration > 60) finishMiniGame(qData);
+    }
+}
+
+function finishMiniGame(qData) {
+    const ratio = caughtCount / totalWords;
+    if (ratio > 0.6) { score += (100 / questions.length) * ratio; overlayText = qData.f || "表现不错！"; }
+    else { overlayText = qData.failF || "再接再厉。"; }
+    overlayTimer = OVERLAY_TOTAL_TIME;
+    currentQuestionIndex++;
+    sceneTransitionAlpha = 0;
+    loadLevelData();
+}
+
+function finishMatchGame(qData) {
+    matchGameFadingOut = true;
+    matchGameFadeAlpha = 1;
+    let correctCount = 0;
+    const totalNeeded = qData.matches.length;
+    connections.forEach(conn => {
+        if (conn.isDeleting) return;
+        if (qData.matches[conn.leftIndex] === conn.rightIndex) correctCount++;
+    });
+    const ratio = correctCount / totalNeeded;
+    if (ratio === 1) { score += (100 / questions.length); overlayText = qData.f || "完美连接！"; }
+    else { overlayText = qData.failF || "有些连接不对哦。"; }
+    overlayTimer = OVERLAY_TOTAL_TIME;
+    setTimeout(() => {
+        currentQuestionIndex++;
+        sceneTransitionAlpha = 0;
+        loadLevelData();
+    }, 300);
+}
+
+function loop() {
+
+    if (overlayTimer > 0) { overlayTimer -= 1/60; if (overlayTimer < 0) overlayTimer = 0; }
+    if (sceneTransitionAlpha < 1) { sceneTransitionAlpha += 0.05; if (sceneTransitionAlpha > 1) sceneTransitionAlpha = 1; }
+    if (matchGameFadingOut && matchGameFadeAlpha > 0) { matchGameFadeAlpha -= 1/60; if (matchGameFadeAlpha < 0) matchGameFadeAlpha = 0; }
+    if (currentQuestionIndex >= questions.length) { if (endScreenAlpha < 1) { endScreenAlpha += 0.02; if (endScreenAlpha > 1) endScreenAlpha = 1; } }
+    
+
+    startTextPulse += 0.05;
+
+
+    update();
+
+
+    draw();
+    requestAnimationFrame(loop);
+}
+
+function lerp(start, end, amt) {
+    return (1 - amt) * start + amt * end;
+}
+
+
+
+function draw() {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    const now = Date.now() / 1000;
+    
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = COLORS.bg;
+    ctx.fillRect(0, 0, width, height);
+    
+
+    ctx.globalAlpha = 1; 
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    buttons.forEach(btn => {
+        // --- 新增：在这里直接计算动画位移 ---
+        
+        // 如果目标是消失（被 handleQuizAnswer 标记了），且还没完全消失
+        if (btn.targetAlpha === 0 && btn.alpha > 0) {
+            btn.y += 5;        // 向下掉落速度 (数值越大掉得越快)
+            btn.alpha -= 0.08; // 消失速度 (数值越大淡出越快)
+            
+            // 防止透明度变成负数
+            if (btn.alpha < 0) btn.alpha = 0;
+        }
+        // 如果是正常显示（入场），保持平滑淡入
+        else if (btn.alpha < btn.targetAlpha) {
+            btn.alpha += (btn.targetAlpha - btn.alpha) * 0.2;
+        }
+
+        // --- 下面是原本的画图代码 (保持不变) ---
+        ctx.globalAlpha = btn.alpha; // 应用透明度
+        
+
+        
+        // 画按钮文字
+        ctx.fillStyle = '#fff'; // 你的文字颜色
+        ctx.font = '20px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(btn.text, btn.x + btn.w / 2, btn.y + btn.h / 2);
+        
+        ctx.globalAlpha = 1; // 恢复透明度，以免影响后续绘图
+    });
+
+    if (currentQuestionIndex === -1) {
+        ctx.save();
+        ctx.globalAlpha = sceneTransitionAlpha;
+        drawText(ctx, "Find the answer", width/2, height/2 - 40, 36, '#ffffff');
+        
+
+        const pulse = (Math.sin(startTextPulse) + 1) / 2; 
+        ctx.globalAlpha = sceneTransitionAlpha * (0.4 + pulse * 0.6);
+        drawText(ctx, "Click anywhere to start", width/2, height/2 + 60, 18, COLORS.textDim);
+        ctx.restore();
+        return;
+    }
+    
+    if (currentQuestionIndex >= questions.length) {
+        ctx.save();
+        ctx.globalAlpha = endScreenAlpha;
+        drawText(ctx, "Test ended", width/2, height * 0.2, 36, '#ffffff');
+        drawText(ctx, Math.round(score).toString(), width/2, height * 0.35, 90, '#ffffff');
+        let resultText = score > 80 ? "soul friend" : (score > 50 ? "Keen observer" : "Unique traveller");
+        drawText(ctx, resultText, width/2, height * 0.5, 24, '#cccccc');
+        const btnW = 200, btnH = 50;
+        const bx = width/2 - btnW/2, by = height * 0.75;
+        const isHover = !isTouching && (mouseX >= bx && mouseX <= bx+btnW && mouseY >= by && mouseY <= by+btnH);
+        drawText(ctx, "再玩一次", width/2, by + btnH/2, 20, isHover ? COLORS.textHover : '#ffffff');
+        ctx.restore();
+        return;
+    }
+    
+
+    const qData = questions[currentQuestionIndex];
+    
+
+    ctx.save();
+    ctx.globalAlpha = sceneTransitionAlpha;
+    ctx.fillStyle = '#555'; ctx.font = '14px sans-serif'; ctx.textAlign = 'left';
+    let qNum = currentQuestionIndex + 1;
+    if (qNum > 1) qNum--;
+    ctx.fillText(`Q ${qNum}/${questions.length}`, 20, 40);
+    ctx.textAlign = 'right';
+    ctx.fillText(`${Math.round(score)}`, width - 20, 40);
+    ctx.restore();
+
+
+    if (qData.TYPE === 1) {
+
+        let foundHover = false;
+        let hoverBtn = null;
+        
+
+        if (!isTouching) {
+            for (let btn of buttons) {
+                if (btn.targetAlpha <= 0) continue; 
+                const isHover = (mouseX >= btn.x && mouseX <= btn.x + btn.w && mouseY >= btn.y && mouseY <= btn.y + btn.h);
+                if (isHover) { foundHover = true; hoverBtn = btn; lastHoverTime = now; activeHoverBtnIndex = btn.index; break; }
+            }
+        }
+
+        if (foundHover) {
+            targetUnderlineY = hoverBtn.y + hoverBtn.h + HOVER_OFFSET;
+            targetAlpha = 1; currentLineX = hoverBtn.x; currentLineW = hoverBtn.w;
+        } else {
+            if (now - lastHoverTime > LIFE_TIME) {
+                targetAlpha = 0;
+                if (activeHoverBtnIndex !== -1 && buttons.length > 0) {
+                    const prevBtn = buttons.find(b => b.index === activeHoverBtnIndex);
+                    if (prevBtn) { targetUnderlineY = prevBtn.y + prevBtn.h + HOVER_OFFSET + IDLE_DROP; currentLineX = prevBtn.x; currentLineW = prevBtn.w; }
+                    else { targetUnderlineY = underlineY + (IDLE_DROP * 0.1); }
+                } else if (buttons.length === 0 && underlineAlpha > 0.01) { targetUnderlineY = underlineY + (IDLE_DROP * 0.1); }
+            }
+        }
+        
+
+        underlineY += (targetUnderlineY - underlineY) * UNDERLINE_SPEED;
+        underlineAlpha += (targetAlpha - underlineAlpha) * UNDERLINE_SPEED;
+        
+
+        if (underlineAlpha > 0.01) {
+            ctx.save();
+            ctx.globalAlpha = underlineAlpha * sceneTransitionAlpha;
+            ctx.strokeStyle = COLORS.textHover;
+            ctx.lineWidth = 2; ctx.lineCap = 'round';
+            ctx.beginPath(); ctx.moveTo(currentLineX, underlineY); ctx.lineTo(currentLineX + currentLineW, underlineY); ctx.stroke();
+            ctx.restore();
+        }
+
+
+        
+            ctx.save();
+            ctx.globalAlpha = sceneTransitionAlpha;
+            
+            if (titleRect.text) {
+                ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.textAlign = 'center';
+                wrapText(ctx, titleRect.text, width/2, titleRect.y + titleRect.h/2, width * 0.9, 30);
+            }
+            
+            ctx.restore();
+        }
+
+
+    if (qData.TYPE === 2) {
+        ctx.save();
+        ctx.globalAlpha = sceneTransitionAlpha;
+        
+        if (qData) { ctx.fillStyle = '#555'; ctx.font = '18px sans-serif'; ctx.textAlign = 'center'; wrapText(ctx, qData.q, width/2, 40, width * 0.9, 24); }
+        ctx.fillStyle = '#555'; ctx.fillText(`${caughtCount} / ${totalWords}`, width/2, 80);
+        const basketY = height - 100;
+        ctx.fillStyle = COLORS.basket; ctx.font = '24px monospace'; ctx.textAlign = 'center';
+        ctx.fillText(qData.player, basketX + basketW/2, basketY + 25);
+        gameItems.forEach(item => {
+            if (!item.active) return;
+            ctx.fillStyle = COLORS.item; ctx.font = '16px sans-serif'; ctx.fillText(item.text, item.x + 20, item.y);
+        });
+        ctx.restore();
+    }
+
+
+    if (qData.TYPE === 3) {
+        const matchAlpha = matchGameFadingOut ? matchGameFadeAlpha : 1;
+        ctx.save();
+        ctx.globalAlpha = matchAlpha * sceneTransitionAlpha;
+        
+        ctx.fillStyle = '#fff'; ctx.font = '20px sans-serif'; ctx.textAlign = 'center';
+        wrapText(ctx, qData.q, width/2, 40, width * 0.9, 24);
+
+
+        connections.forEach(conn => {
+            if (conn.alpha < conn.targetAlpha) conn.alpha += SMOOTH_FACTOR;
+            else if (conn.alpha > conn.targetAlpha) conn.alpha -= SMOOTH_FACTOR;
+            if (conn.alpha <= 0.01) return; 
+
+            let lNode = matchNodesLeft[conn.leftIndex];
+            let rNode = matchNodesRight[conn.rightIndex];
+
+            ctx.save();
+            ctx.strokeStyle = COLORS.line; 
+            ctx.globalAlpha = conn.alpha * matchAlpha * sceneTransitionAlpha; 
+            ctx.lineWidth = conn.isHovered ? 5 : 3;
+            ctx.beginPath();
+            ctx.moveTo(lNode.x, lNode.y);
+            ctx.lineTo(rNode.x, rNode.y);
+            ctx.stroke();
+            ctx.restore();
+        });
+
+
+
+        if (isDrawingLine && tempLine && activeDragNode) {
+            ctx.save();
+            
+
+            ctx.strokeStyle = COLORS.line;
+            ctx.lineWidth = 4;
+            ctx.lineCap = 'round';
+            
+
+            const dashLength = 40; 
+
+
+
+            const dx = tempLine.x - activeDragNode.x;
+            const dy = tempLine.y - activeDragNode.y;
+            const angle = Math.atan2(dy, dx);
+
+
+            ctx.save();
+            ctx.translate(activeDragNode.x, activeDragNode.y);
+            ctx.rotate(angle);
+            
+            ctx.beginPath();
+
+            ctx.moveTo(-dashLength / 2, 0);
+            ctx.lineTo(dashLength / 2, 0);
+            ctx.stroke();
+            ctx.restore();
+
+
+            ctx.save();
+            ctx.translate(tempLine.x, tempLine.y);
+            ctx.rotate(angle);
+            
+            ctx.beginPath();
+
+            ctx.moveTo(-dashLength / 2, 0);
+            ctx.lineTo(dashLength / 2, 0);
+            ctx.stroke();
+            ctx.restore();
+
+            ctx.restore();
+        }
+
+        const drawNode = (node) => {
+            let isConnected = connections.some(c => !c.isDeleting && (
+                (node.side === 'left' && c.leftIndex === node.index) ||
+                (node.side === 'right' && c.rightIndex === node.index)
+            ));
+            let isHover = !isTouching && Math.hypot(node.x - mouseX, node.y - mouseY) < 30;
+            let isDragging = (isMovingNode && activeDragNode === node);
+
+            let targetIsConnected = isConnected ? 1 : 0;
+            if (node.targetColorAlpha < targetIsConnected) node.targetColorAlpha += SMOOTH_FACTOR;
+            else if (node.targetColorAlpha > targetIsConnected) node.targetColorAlpha -= SMOOTH_FACTOR;
+            node.colorAlpha = lerp(node.colorAlpha, node.targetColorAlpha, SMOOTH_FACTOR);
+
+            let r=255, g=255, b=255; 
+            if (isDragging) { r=255; g=235; b=59; } 
+            else if (node.colorAlpha > 0.1) {
+                let gray = 136; 
+                r = lerp(255, gray, node.colorAlpha);
+                g = lerp(255, gray, node.colorAlpha);
+                b = lerp(255, gray, node.colorAlpha);
+            }
+            
+            ctx.fillStyle = `rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+            ctx.font = '24px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(node.text, node.x, node.y);
+        };
+
+        matchNodesLeft.forEach(drawNode);
+        matchNodesRight.forEach(drawNode);
+
+
+        if(checkBtnRect) {
+            let isCheckHover = !isTouching && (mouseX >= checkBtnRect.x && mouseX <= checkBtnRect.x + checkBtnRect.w && mouseY >= checkBtnRect.y && mouseY <= checkBtnRect.y + checkBtnRect.h);
+            checkBtnRect.targetAlpha = isCheckHover ? 0.7 : 1; 
+            if(checkBtnRect.alpha < checkBtnRect.targetAlpha) checkBtnRect.alpha += SMOOTH_FACTOR;
+            else if(checkBtnRect.alpha > checkBtnRect.targetAlpha) checkBtnRect.alpha -= SMOOTH_FACTOR;
+            
+            ctx.save();
+            let r = lerp(255, 170, checkBtnRect.alpha); 
+            ctx.fillStyle = `rgb(${Math.round(r)},${Math.round(r)},${Math.round(r)})`;
+            ctx.fillRect(checkBtnRect.x, checkBtnRect.y, checkBtnRect.w, checkBtnRect.h);
+            ctx.fillStyle = '#000';
+            ctx.font = '16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText("check", checkBtnRect.x + checkBtnRect.w/2, checkBtnRect.y + checkBtnRect.h/2);
+            ctx.restore();
+        }
+        ctx.restore();
+    }
+
+
+    if (overlayText !== "" && overlayTimer > 0) {
+        ctx.save();
+        let alpha = 0;
+        const t = overlayTimer;
+        if (t > OVERLAY_HOLD_TIME + OVERLAY_FADE_DURATION) {
+            const progress = (OVERLAY_TOTAL_TIME - t) / OVERLAY_FADE_IN_DURATION;
+            alpha = Math.min(1, progress);
+        } else if (t > OVERLAY_FADE_DURATION) { alpha = 1; }
+        else { alpha = t / OVERLAY_FADE_DURATION; }
+        ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+        if (alpha > 0.01) {
+            ctx.fillStyle = COLORS.subtitle;
+            ctx.font = '16px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            wrapText(ctx, overlayText, width/2, height - 60, width * 0.8, 22);
+        }
+        ctx.restore();
+    }
+}
+
+function drawText(ctx, text, x, y, size, color, align='center') {
+    ctx.fillStyle = color;
+    ctx.font = `${size}px sans-serif`;
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y);
+}
+
+function wrapText(ctx, text, x, y, maxWidth, lineHeight) {
+    if (!text) return;
+    const characters = text.split('');
+    let line = ''; let lines = [];
+    for(let n = 0; n < characters.length; n++) {
+        const testLine = line + characters[n];
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width > maxWidth && n > 0) { lines.push(line); line = characters[n]; }
+        else { line = testLine; }
+    }
+    lines.push(line);
+    const totalHeight = lines.length * lineHeight;
+    let startY = y - (totalHeight / 2) + (lineHeight / 2);
+    for(let i=0; i<lines.length; i++) { ctx.fillText(lines[i], x, startY + (i*lineHeight)); }
+}
+
+
+
+function handleMove(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    updateInput(clientX - rect.left, clientY - rect.top);
+    isTouching = false;
+}
+
+function handleStart(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    updateInput(x, y);
+    isTouching = true;
+    const qData = currentQuestionIndex >= 0 && currentQuestionIndex < questions.length ? questions[currentQuestionIndex] : null;
+
+
+    if (qData && qData.TYPE === 3 && !matchGameFadingOut) {
+        const clickedNode = getClickedNode(x, y);
+        if (clickedNode) {
+            let isConnected = connections.some(c => !c.isDeleting && (
+                (clickedNode.side === 'left' && c.leftIndex === clickedNode.index) ||
+                (clickedNode.side === 'right' && c.rightIndex === clickedNode.index)
+            ));
+
+            if (!isConnected) {
+                const now = Date.now();
+
+                if (now - lastClickTime < 300 && Math.hypot(lastClickPos.x - x, lastClickPos.y - y) < 10) {
+                    isMovingNode = true; activeDragNode = clickedNode; isDrawingLine = false; tempLine = null; lastClickTime = 0;
+                } 
+
+                else {
+                    isDrawingLine = true; activeDragNode = clickedNode; isMovingNode = false; tempLine = { startNode: clickedNode, x: x, y: y }; lastClickTime = now; lastClickPos = {x, y};
+                }
+                return; 
+            }
+        }
+    }
+    
+
+    const now = Date.now();
+    if (now - lastClickTime < 300 && Math.hypot(lastClickPos.x - x, lastClickPos.y - y) < 10) { handleClick(x, y, true); lastClickTime = 0; } 
+    else { lastClickTime = now; lastClickPos = {x, y}; handleClick(x, y, false); }
+}
+
+function handleEnd(clientX, clientY) {
+    isTouching = false;
+    const rect = canvas.getBoundingClientRect();
+    handleRelease(clientX - rect.left, clientY - rect.top);
+}
+
+canvas.addEventListener('mousemove', e => { handleMove(e.clientX, e.clientY); });
+canvas.addEventListener('mousedown', e => {
+    handleMove(e.clientX, e.clientY);
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    const qData = currentQuestionIndex >= 0 && currentQuestionIndex < questions.length ? questions[currentQuestionIndex] : null;
+    if (qData && qData.TYPE === 3 && !matchGameFadingOut) {
+        const clickedNode = getClickedNode(x, y);
+        if (clickedNode) {
+            let isConnected = connections.some(c => !c.isDeleting && (
+                (clickedNode.side === 'left' && c.leftIndex === clickedNode.index) ||
+                (clickedNode.side === 'right' && c.rightIndex === clickedNode.index)
+            ));
+            if (!isConnected) {
+                const now = Date.now();
+                if (now - lastClickTime < 300 && Math.hypot(lastClickPos.x - x, lastClickPos.y - y) < 10) {
+                    isMovingNode = true; activeDragNode = clickedNode; isDrawingLine = false; tempLine = null; lastClickTime = 0;
+                } else {
+                    isDrawingLine = true; activeDragNode = clickedNode; isMovingNode = false; tempLine = { startNode: clickedNode, x: x, y: y }; lastClickTime = now; lastClickPos = {x, y};
+                }
+                return;
+            }
+        }
+    }
+
+    const now = Date.now();
+    if (now - lastClickTime < 300 && Math.hypot(lastClickPos.x - x, lastClickPos.y - y) < 10) { handleClick(x, y, true); lastClickTime = 0; } 
+    else { lastClickTime = now; lastClickPos = {x, y}; handleClick(x, y, false); }
+});
+canvas.addEventListener('mouseup', e => { handleEnd(e.clientX, e.clientY); });
+
+canvas.addEventListener('touchstart', e => { e.preventDefault(); handleStart(e.touches[0].clientX, e.touches[0].clientY); }, {passive: false});
+canvas.addEventListener('touchmove', e => { e.preventDefault(); handleMove(e.touches[0].clientX, e.touches[0].clientY); isTouching = true; }, {passive: false});
+canvas.addEventListener('touchend', e => { e.preventDefault(); handleEnd(e.changedTouches[0].clientX, e.changedTouches[0].clientY); }, {passive: false});
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
