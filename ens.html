@@ -365,7 +365,6 @@ function distToSegment(px, py, x1, y1, x2, y2) {
 }
 
 function handleQuizAnswer(index, qData, clickX, clickY) {
-    // 1. 计分与反馈 (保持不变)
     const correctAnswers = Array.isArray(qData.a) ? qData.a : [qData.a];
     const hasAnswer = qData.a !== undefined;
     const isCorrect = hasAnswer && correctAnswers.includes(index);
@@ -374,33 +373,33 @@ function handleQuizAnswer(index, qData, clickX, clickY) {
     let text = "";
     if (qData.f) {
         if (typeof qData.f === 'object' && !Array.isArray(qData.f)) text = qData.f[index] !== undefined ? qData.f[index] : qData.f['default'];
-        else if (Array.isArray(qData.f)) text = qData.f[index] || "收到";
+        else if (Array.isArray(qData.f)) text = qData.f[index] || "ok";
         else text = qData.f;
         if (!text && qData.f['default']) text = qData.f['default'];
     }
-    overlayText = text || "收到反馈";
+    overlayText = text || "";
     overlayTimer = OVERLAY_TOTAL_TIME;
     
-    // 2. 准备切换
+
     const nextIndex = currentQuestionIndex + 1;
     currentQuestionIndex = nextIndex;
     sceneTransitionAlpha = 0;
 
-    // --- 新增：触发向下淡出 ---
+
     
-    // 1. 标记按钮：目标透明度设为0（让 draw 函数里的逻辑生效）
+
     buttons.forEach(btn => {
         btn.targetAlpha = 0;
     });
 
-    // 2. 标记标题
+
     if (titleRect) {
         titleRect.targetAlpha = 0;
     }
 
         loadLevelData();
 
-    // 4. 直接返回，阻止立即切换
+
     return;
 }
 
@@ -553,34 +552,34 @@ function draw() {
     ctx.textBaseline = 'alphabetic';
 
     buttons.forEach(btn => {
-        // --- 新增：在这里直接计算动画位移 ---
+
         
-        // 如果目标是消失（被 handleQuizAnswer 标记了），且还没完全消失
+
         if (btn.targetAlpha === 0 && btn.alpha > 0) {
-            btn.y += 5;        // 向下掉落速度 (数值越大掉得越快)
-            btn.alpha -= 0.08; // 消失速度 (数值越大淡出越快)
+            btn.y += 5;
+            btn.alpha -= 0.08;
             
-            // 防止透明度变成负数
+
             if (btn.alpha < 0) btn.alpha = 0;
         }
-        // 如果是正常显示（入场），保持平滑淡入
+
         else if (btn.alpha < btn.targetAlpha) {
             btn.alpha += (btn.targetAlpha - btn.alpha) * 0.2;
         }
 
-        // --- 下面是原本的画图代码 (保持不变) ---
-        ctx.globalAlpha = btn.alpha; // 应用透明度
+
+        ctx.globalAlpha = btn.alpha;
         
 
         
-        // 画按钮文字
-        ctx.fillStyle = '#fff'; // 你的文字颜色
+
+        ctx.fillStyle = '#fff';
         ctx.font = '20px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(btn.text, btn.x + btn.w / 2, btn.y + btn.h / 2);
         
-        ctx.globalAlpha = 1; // 恢复透明度，以免影响后续绘图
+        ctx.globalAlpha = 1;
     });
 
     if (currentQuestionIndex === -1) {
